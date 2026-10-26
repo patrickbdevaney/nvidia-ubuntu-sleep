@@ -1,7 +1,9 @@
 # Board-Specific Quirks
 
-This document tracks known ACPI wakeup source issues by motherboard family.
-The installer auto-detects these, but this serves as a reference.
+This document tracks ACPI wakeup-source issues by motherboard family, as reported by
+users. Entries are not independently verified; device names and PCI addresses vary
+by board revision and firmware version. The installer detects enabled sources at
+install time; this file is a reference.
 
 ## AMD Platforms
 
@@ -66,7 +68,8 @@ echo SOURCENAME | sudo tee /proc/acpi/wakeup
 # Note: writing to this file TOGGLES the state, it does not set it.
 # If currently enabled, writing the name disables it.
 # If currently disabled, writing the name re-enables it.
-# The wakeup-disable service accounts for this by reading state first.
+# The wakeup-disable service accounts for this: each ExecStart writes only
+# if the source is currently *enabled, so restarting the service is safe.
 ```
 
 ---

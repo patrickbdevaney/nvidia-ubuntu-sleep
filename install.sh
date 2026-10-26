@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # nvidia-sleep-fix: Bulletproof NVIDIA GPU suspend/resume for Ubuntu/Linux
-# https://github.com/yourusername/nvidia-sleep-fix
+# https://github.com/patrickbdevaney/nvidia-ubuntu-sleep
 #
 # Tested on:
 #   - Ubuntu 24.04 LTS / 24.10
@@ -117,15 +117,17 @@ header "Step 1: NVIDIA Module Parameters"
 MODPROBE_CONF="/etc/modprobe.d/nvidia-power-management.conf"
 cat > "$MODPROBE_CONF" << 'EOF'
 # nvidia-sleep-fix: Power management parameters for reliable suspend/resume
-# https://github.com/yourusername/nvidia-sleep-fix
+# https://github.com/patrickbdevaney/nvidia-ubuntu-sleep
 #
 # NVreg_PreserveVideoMemoryAllocations=1
-#   Tells the driver to save GPU video memory to disk/RAM before suspend.
-#   Without this, the GPU cannot properly power down — fans keep spinning.
+#   Saves all video memory allocations on suspend and restores them on
+#   resume (the /proc/driver/nvidia/suspend path used by nvidia-suspend,
+#   nvidia-resume and nvidia-hibernate.service).
 #
 # NVreg_TemporaryFilePath=/var/tmp
-#   Where to store saved GPU memory during suspend. /var/tmp persists across
-#   resume unlike /tmp which may be cleared.
+#   Where the saved video memory is written. Must be a disk-backed
+#   filesystem with free space at least equal to the VRAM in use; a tmpfs
+#   /tmp would hold the dump in system RAM instead.
 #
 # fbdev=1
 #   Enables framebuffer device support for the nvidia-drm module,
@@ -203,13 +205,14 @@ header "Step 5: Disable Problematic ACPI Wakeup Sources"
 WAKEUP_EXEC_LINES=""
 if [[ ${#WAKEUP_SOURCES[@]} -gt 0 ]]; then
     for src in "${WAKEUP_SOURCES[@]}"; do
-        WAKEUP_EXEC_LINES+="ExecStart=/bin/sh -c 'echo ${src} > /proc/acpi/wakeup'\n"
+        WAKEUP_EXEC_LINES+="ExecStart=/bin/sh -c 'grep -q \"^${src}[[:space:]].*[*]enabled\" /proc/acpi/wakeup && echo ${src} > /proc/acpi/wakeup || true'\n"
     done
 else
-    # Safe defaults that cover Gigabyte B550/X570 and most AMD platforms
-    # On Intel/other boards these are harmless no-ops if not present
+    # Defaults for Gigabyte B550/X570 and similar AMD boards. /proc/acpi/wakeup
+    # TOGGLES on write, so each line flips a source only if it is currently
+    # enabled; absent or already-disabled sources are left alone.
     for src in GPP0 PTXH XHC0; do
-        WAKEUP_EXEC_LINES+="ExecStart=/bin/sh -c 'echo ${src} > /proc/acpi/wakeup'\n"
+        WAKEUP_EXEC_LINES+="ExecStart=/bin/sh -c 'grep -q \"^${src}[[:space:]].*[*]enabled\" /proc/acpi/wakeup && echo ${src} > /proc/acpi/wakeup || true'\n"
     done
     warn "No wakeup sources detected at runtime — using safe defaults (GPP0, PTXH, XHC0)"
 fi
@@ -281,7 +284,8 @@ fi
 header "Step 7: APT Hook — Auto-rebuild initramfs After NVIDIA Updates"
 
 cat > /etc/apt/apt.conf.d/99-nvidia-sleep-fix << 'EOF'
-# nvidia-sleep-fix: Rebuild initramfs whenever an NVIDIA package is updated
+# nvidia-sleep-fix: rebuild initramfs after dpkg transactions. Note: this runs
+# after EVERY dpkg invocation while any nvidia-* package is installed.
 # This ensures NVreg_PreserveVideoMemoryAllocations and other modprobe options
 # are always baked into the initramfs after driver upgrades.
 DPkg::Post-Invoke {
@@ -384,7 +388,7 @@ if [[ -x /usr/lib/systemd/system-sleep/nvidia ]]; then
     ok "Canonical NVIDIA sleep hook present and executable"
 else
     fail "/usr/lib/systemd/system-sleep/nvidia missing or not executable"
-    echo "     Fix: sudo apt install --reinstall \$(dpkg -l 'nvidia-driver-*' | awk '/^ii/{print \$2}' | head-1)"
+    echo "     Fix: sudo apt install --reinstall \$(dpkg -l 'nvidia-driver-*' | awk '/^ii/{print \$2}' | head -1)"
 fi
 
 # 7. TemporaryFilePath
@@ -403,6 +407,7 @@ else
     echo -e "${RED}${BOLD}$FAILURES check(s) failed. Fix the above before suspending.${RESET}"
 fi
 echo ""
+[[ $FAILURES -eq 0 ]]
 CHECKEOF
 
 chmod +x "$CHECK_SCRIPT"

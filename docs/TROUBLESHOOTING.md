@@ -12,7 +12,14 @@ This diagnoses every layer of the fix chain in 2 seconds. Fix any `[FAIL]` items
 
 ## Symptom: GPU fans spinning, blue light on during suspend
 
-**Root cause:** `NVreg_PreserveVideoMemoryAllocations` is not active, OR `nvidia-suspend.service` never ran.
+**Root cause:** the platform never reached S3, or suspend was aborted. Check the sleep state first:
+
+```bash
+cat /sys/power/mem_sleep          # [deep] = S3; [s2idle] = suspend-to-idle, where PCIe devices can stay powered
+journalctl -b -1 | grep -iE "PM: suspend|ACPI: PM"   # did the last attempt complete?
+```
+
+On `s2idle`-only platforms the GPU stays powered unless it reaches D3 through runtime power management; see NVIDIA's driver README ("Configuring Power Management Support"). If the state is `deep` and the fans still spin, the system did not complete S3 (in S3 the slot loses main power); the journal shows where it stopped. Common NVIDIA-side causes are `nvidia-suspend.service` failing or never running, and `NVreg_PreserveVideoMemoryAllocations` not being active. Note also that RGB lighting on 5 V standby can stay lit in S3 by design unless the firmware's ErP/EuP option is enabled.
 
 **Diagnose:**
 ```bash
@@ -69,7 +76,8 @@ cat /proc/acpi/wakeup | grep -iE "GPP|PTXH|XHC"
 If a source not covered by the service is enabled, add it:
 ```bash
 sudo nano /etc/systemd/system/nvidia-wakeup-disable.service
-# Add: ExecStart=/bin/sh -c 'echo SOURCENAME > /proc/acpi/wakeup'
+# Add (writes TOGGLE, so guard on the current state):
+# ExecStart=/bin/sh -c 'grep -q "^SOURCENAME[[:space:]].*[*]enabled" /proc/acpi/wakeup && echo SOURCENAME > /proc/acpi/wakeup || true'
 sudo systemctl daemon-reload
 sudo systemctl restart nvidia-wakeup-disable.service
 ```
@@ -157,7 +165,7 @@ wakeonlan <MAC-ADDRESS>
 
 This is normal behavior with `NVreg_PreserveVideoMemoryAllocations=1`. The driver is saving and restoring all GPU memory. For a 3090 (24GB) expect 5-15 seconds on resume.
 
-`NVreg_TemporaryFilePath=/var/tmp` ensures this is written to a tmpfs which is faster than disk.
+`NVreg_TemporaryFilePath=/var/tmp` puts the dump on disk (not tmpfs), so it does not consume system RAM. Resume time scales with the VRAM in use and the speed of that disk.
 
 ---
 
